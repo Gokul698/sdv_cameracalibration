@@ -2,48 +2,73 @@ import pyrealsense2 as rs
 import numpy as np
 import cv2
 
-def get_median_distance(depth_frame, x, y, radius=5):
-    distances = []
-    for dx in range(-radius, radius + 1):
-        for dy in range(-radius, radius + 1):
-            d = depth_frame.get_distance(x + dx, y + dy)
-            if d > 0:
-                distances.append(d)
-    return np.median(distances) if distances else 0.0
-
 def main():
+    # Dynamic context check for connected RealSense hardware
+    ctx = rs.context()
+    devices = ctx.query_devices()
+    if len(devices) == 0:
+        print("[ERROR] No Intel RealSense device detected. Check hardware connection.")
+        return
+    
+    dev = devices[0]
+    usb_type = dev.get_info(rs.camera_info.usb_type_descriptor)
+    print(f"[INFO] Connected Device: {dev.get_info(rs.camera_info.name)}")
+    print(f"[INFO] Detected USB Protocol Type: {usb_type}")
+
     pipeline = rs.pipeline()
     config = rs.config()
-    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
 
-    pipeline.start(config)
+    # Dynamic profile adjustment based on USB speed capability (USB 2.0 vs 3.0+)
+    if float(usb_type) < 3.0:
+        print("[INFO] USB 2.0 bus active: Optimizing profile streams to prevent bandwidth bottlenecks.")
+        config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+        config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+    else:
+        print("[INFO] USB 3.0+ SuperSpeed bus active: Enabling high-performance profile.")
+        config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+        config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+
+    # Align depth frames to color coordinate space
     align = rs.align(rs.stream.color)
 
-    print("[INFO] Advanced D435i Alignment & Distance Measurement active. Press 'q' to exit.")
+    print("[INFO] Initializing RealSense pipeline...")
+    pipeline.start(config)
+    print("[SUCCESS] Streaming active! Press 'q' to exit window.")
+
     try:
         while True:
-            frames = pipeline.wait_for_frames()
+            frames = pipeline.wait_for_frames(timeout_ms=10000)
             aligned_frames = align.process(frames)
-            
+
             depth_frame = aligned_frames.get_depth_frame()
             color_frame = aligned_frames.get_color_frame()
+
             if not depth_frame or not color_frame:
                 continue
 
+            depth_image = np.asanyarray(depth_frame.get_data())
             color_image = np.asanyarray(color_frame.get_data())
-            h, w, _ = color_image.shape
-            cx, cy = w // 2, h // 2
-            
-            dist = get_median_distance(depth_frame, cx, cy, radius=5)
 
-            cv2.circle(color_image, (cx, cy), 5, (0, 255, 0), -1)
-            cv2.putText(color_image, f"Center Distance: {dist:.2f} m", (30, 50),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            # Real-time distance lookup at center pixel crosshair
+            height, width, _ = color_image.shape
+            cx, cy = int(width / 2), int(height / 2)
+            distance_meters = depth_frame.get_distance(cx, cy)
 
-            cv2.imshow("D435i Aligned View with Real-Time Distance", color_image)
+            # Draw visual tracking elements
+            cv2.drawMarker(color_image, (cx, cy), (0, 255, 0), markerType=cv2.MARKER_CROSS, markerSize=20, thickness=2)
+            text = f"Distance: {distance_meters:.2f}m (USB {usb_type})"
+            cv2.putText(color_image, text, (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+            # Colorize depth map data
+            depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
+
+            # Combine side-by-side display feed
+            combined = np.hstack((color_image, depth_colormap))
+            cv2.imshow('Dynamic D435i - Aligned RGB (Left) | Depth (Right)', combined)
+
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
+
     finally:
         pipeline.stop()
         cv2.destroyAllWindows()

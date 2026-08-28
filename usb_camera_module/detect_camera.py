@@ -1,30 +1,40 @@
+import os
+os.environ["QT_LOGGING_RULES"] = "*.debug=false;qt.qpa.fonts.warning=false"
 import cv2
-import glob
 
-def scan_cameras():
-    print("[INFO] Dynamically discovering standard UVC USB cameras...")
-    valid_cameras = []
-    
-    for path in sorted(glob.glob('/dev/video*')):
-        # Skip RealSense infrared/depth metadata nodes to prevent timeouts
-        if int(''.join(filter(str.isdigit, path))) < 5 and "video" in path:
-            # Quick check to avoid hanging on RealSense control endpoints
-            pass
-            
-        cam_idx = int(''.join(filter(str.isdigit, path)))
-        cap = cv2.VideoCapture(cam_idx, cv2.CAP_V4L2)
+def find_available_cameras(max_tested=4):
+    available_cameras = []
+    print("Scanning for available USB cameras...")
+    for i in range(max_tested):
+        cap = cv2.VideoCapture(i, cv2.CAP_V4L2)
         if cap.isOpened():
             ret, frame = cap.read()
             if ret and frame is not None:
-                h, w = frame.shape[:2]
-                print(f"[SUCCESS] USB Camera detected at {path} (Index: {cam_idx}) | Resolution: {w}x{h}")
-                valid_cameras.append(cam_idx)
+                print(f" -> Working USB camera found at index {i}")
+                available_cameras.append(i)
             cap.release()
+    return available_cameras
+
+def main():
+    cameras = find_available_cameras()
+    if not cameras:
+        print("Error: No active USB cameras detected!")
+        return
+
+    cam_index = cameras[0]
+    print(f"Using camera index: {cam_index}. Press 'q' to exit.")
+    cap = cv2.VideoCapture(cam_index, cv2.CAP_V4L2)
+    
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        cv2.imshow(f"USB Camera Feed (Index {cam_index})", frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
             
-    if not valid_cameras:
-        print("[ERROR] No valid USB video streams found.")
-    else:
-        print(f"[INFO] Scan complete. Valid camera indices: {valid_cameras}")
+    cap.release()
+    cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    scan_cameras()
+    main()
